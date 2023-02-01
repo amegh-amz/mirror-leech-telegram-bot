@@ -1,4 +1,4 @@
-from re import findall as re_findall
+from re import findall as re_findall, match as re_match
 from threading import Thread, Event
 from time import time
 from math import ceil
@@ -24,7 +24,8 @@ class MirrorStatus:
     STATUS_UPLOADING = "Upload"
     STATUS_DOWNLOADING = "Download"
     STATUS_CLONING = "Clone"
-    STATUS_WAITING = "Queue"
+    STATUS_QUEUEDL = "QueueDl"
+    STATUS_QUEUEUP = "QueueUp"
     STATUS_PAUSED = "Pause"
     STATUS_ARCHIVING = "Archive"
     STATUS_EXTRACTING = "Extract"
@@ -106,8 +107,7 @@ def get_progress_bar_string(status):
     cFull = p // 8
     p_str = '■' * cFull
     p_str += '□' * (12 - cFull)
-    p_str = f"[{p_str}]"
-    return p_str
+    return f"[{p_str}]"
 
 def get_readable_message():
     with download_dict_lock:
@@ -176,7 +176,7 @@ def get_readable_message():
             buttons.sbutton("♻️", "status ref")
             button = buttons.build_menu(3)
             return msg + bmsg, button
-        return msg + bmsg, ""
+        return msg + bmsg, None
 
 def turn(data):
     STATUS_LIMIT = config_dict['STATUS_LIMIT']
@@ -225,6 +225,9 @@ def is_url(url: str):
 
 def is_gdrive_link(url: str):
     return "drive.google.com" in url
+
+def is_Sharerlink(url: str):
+    return bool(re_match(r'https?:\/\/.+\.gdtot\.\S+|https?:\/\/(filepress|filebee|appdrive|gdflix)\.\S+', url))
 
 def is_mega_link(url: str):
     return "mega.nz" in url or "mega.co.nz" in url

@@ -1,27 +1,30 @@
 from requests import utils as rutils
 from re import search as re_search
 from time import sleep
-from os import path as ospath, remove as osremove, listdir, walk
+from os import path as ospath, remove as osremove, listdir, walk, rename, makedirs
 from subprocess import Popen
 from html import escape
+from shutil import move
 
-from bot import Interval, aria2, DOWNLOAD_DIR, download_dict, download_dict_lock, LOGGER, DB_URI, MAX_SPLIT_SIZE, config_dict, status_reply_dict_lock
+from bot import Interval, aria2, DOWNLOAD_DIR, download_dict, download_dict_lock, LOGGER, DATABASE_URL, MAX_SPLIT_SIZE, config_dict, status_reply_dict_lock, user_data, non_queued_up, non_queued_dl, queued_up, queued_dl, queue_dict_lock
 from bot.helper.ext_utils.fs_utils import get_base_name, get_path_size, split_file, clean_download, clean_target
 from bot.helper.ext_utils.exceptions import NotSupportedExtractionArchive
+from bot.helper.ext_utils.queued_starter import start_from_queued
 from bot.helper.mirror_utils.status_utils.extract_status import ExtractStatus
 from bot.helper.mirror_utils.status_utils.zip_status import ZipStatus
 from bot.helper.mirror_utils.status_utils.split_status import SplitStatus
 from bot.helper.mirror_utils.status_utils.upload_status import UploadStatus
 from bot.helper.mirror_utils.status_utils.tg_upload_status import TgUploadStatus
+from bot.helper.mirror_utils.status_utils.queue_status import QueueStatus
 from bot.helper.mirror_utils.upload_utils.gdriveTools import GoogleDriveHelper
 from bot.helper.mirror_utils.upload_utils.pyrogramEngine import TgUploader
-from bot.helper.telegram_helper.message_utils import sendMessage, sendMarkup, delete_all_messages, update_all_messages
+from bot.helper.telegram_helper.message_utils import sendMessage, delete_all_messages, update_all_messages
 from bot.helper.telegram_helper.button_build import ButtonMaker
 from bot.helper.ext_utils.db_handler import DbManger
 
 
 class MirrorLeechListener:
-    def __init__(self, bot, message, isZip=False, extract=False, isQbit=False, isLeech=False, pswd=None, tag=None, select=False, seed=False):
+    def __init__(self, bot, message, isZip=False, extract=False, isQbit=False, isLeech=False, pswd=None, tag=None, select=False, seed=False, sameDir={}):
         self.bot = bot
         self.message = message
         self.uid = message.message_id
@@ -37,6 +40,8 @@ class MirrorLeechListener:
         self.select = select
         self.isPrivate = message.chat.type in ['private', 'group']
         self.suproc = None
+        self.queuedUp = False
+        self.sameDir = sameDir
 
     def clean(self):
         try:
@@ -49,19 +54,37 @@ class MirrorLeechListener:
             pass
 
     def onDownloadStart(self):
-        if not self.isPrivate and config_dict['INCOMPLETE_TASK_NOTIFIER'] and DB_URI:
+        if not self.isPrivate and config_dict['INCOMPLETE_TASK_NOTIFIER'] and DATABASE_URL:
             DbManger().add_incomplete_task(self.message.chat.id, self.message.link, self.tag)
 
     def onDownloadComplete(self):
         with download_dict_lock:
+            if len(self.sameDir) > 1:
+                self.sameDir.remove(self.uid)
+                folder_name = listdir(self.dir)[-1]
+                path = f"{self.dir}/{folder_name}"
+                des_path = f"{DOWNLOAD_DIR}{list(self.sameDir)[0]}/{folder_name}"
+                makedirs(des_path, exist_ok=True)
+                for subdir in listdir(path):
+                    sub_path = f"{self.dir}/{folder_name}/{subdir}"
+                    if subdir in listdir(des_path):
+                        sub_path = rename(sub_path, f"{self.dir}/{folder_name}/1-{subdir}")
+                    move(sub_path, des_path)
+                del download_dict[self.uid]
+                return
             download = download_dict[self.uid]
             name = str(download.name()).replace('/', '')
             gid = download.gid()
         LOGGER.info(f"Download completed: {name}")
         if name == "None" or self.isQbit or not ospath.exists(f"{self.dir}/{name}"):
             name = listdir(self.dir)[-1]
-        m_path = f'{self.dir}/{name}'
+        m_path = f"{self.dir}/{name}"
         size = get_path_size(m_path)
+        with queue_dict_lock:
+            if self.uid in non_queued_dl:
+                non_queued_dl.remove(self.uid)
+        start_from_queued()
+        user_dict = user_data.get(self.message.from_user.id, {})
         if self.isZip:
             if self.seed and self.isLeech:
                 self.newDir = f"{self.dir}10000"
@@ -70,7 +93,7 @@ class MirrorLeechListener:
                 path = f"{m_path}.zip"
             with download_dict_lock:
                 download_dict[self.uid] = ZipStatus(name, size, gid, self)
-            LEECH_SPLIT_SIZE = config_dict['LEECH_SPLIT_SIZE']
+            LEECH_SPLIT_SIZE = user_dict.get('split_size', False) or config_dict['LEECH_SPLIT_SIZE']
             if self.pswd is not None:
                 if self.isLeech and int(size) > LEECH_SPLIT_SIZE:
                     LOGGER.info(f'Zip: orig_path: {m_path}, zip_path: {path}.0*')
@@ -106,10 +129,7 @@ class MirrorLeechListener:
                         for file_ in files:
                             if re_search(r'\.part0*1\.rar$|\.7z\.0*1$|\.zip\.0*1$|\.zip$|\.7z$|^.(?!.*\.part\d+\.rar)(?=.*\.rar$)', file_):
                                 f_path = ospath.join(dirpath, file_)
-                                if self.seed:
-                                    t_path = dirpath.replace(self.dir, self.newDir)
-                                else:
-                                    t_path = dirpath
+                                t_path = dirpath.replace(self.dir, self.newDir) if self.seed else dirpath
                                 if self.pswd is not None:
                                     self.suproc = Popen(["7z", "x", f"-p{self.pswd}", f_path, f"-o{t_path}", "-aot"])
                                 else:
@@ -162,7 +182,7 @@ class MirrorLeechListener:
             o_files = []
             if not self.isZip:
                 checked = False
-                LEECH_SPLIT_SIZE = config_dict['LEECH_SPLIT_SIZE']
+                LEECH_SPLIT_SIZE = user_dict.get('split_size', False) or config_dict['LEECH_SPLIT_SIZE']
                 for dirpath, subdir, files in walk(up_dir, topdown=False):
                     for file_ in files:
                         f_path = ospath.join(dirpath, file_)
@@ -179,20 +199,43 @@ class MirrorLeechListener:
                             if res == "errored":
                                 if f_size <= MAX_SPLIT_SIZE:
                                     continue
-                                else:
-                                    try:
-                                        osremove(f_path)
-                                    except:
-                                        return
+                                try:
+                                    osremove(f_path)
+                                except:
+                                    return
                             elif not self.seed or self.newDir:
                                 try:
                                     osremove(f_path)
                                 except:
                                     return
-                            elif self.seed and res != "errored":
+                            else:
                                 m_size.append(f_size)
                                 o_files.append(file_)
 
+        up_limit = config_dict['QUEUE_UPLOAD']
+        all_limit = config_dict['QUEUE_ALL']
+        added_to_queue = False
+        with queue_dict_lock:
+            dl = len(non_queued_dl)
+            up = len(non_queued_up)
+            if (all_limit and dl + up >= all_limit and (not up_limit or up >= up_limit)) or (up_limit and up >= up_limit):
+                added_to_queue = True
+                LOGGER.info(f"Added to Queue/Upload: {name}")
+                queued_up[self.uid] = [self]
+        if added_to_queue:
+            with download_dict_lock:
+                download_dict[self.uid] = QueueStatus(name, size, gid, self, 'Up')
+                self.queuedUp = True
+            while self.queuedUp:
+                sleep(1)
+            with download_dict_lock:
+                if self.uid not in download_dict.keys():
+                    return
+            LOGGER.info(f'Start from Queued/Upload: {name}')
+        with queue_dict_lock:
+            non_queued_up.add(self.uid)
+
+        if self.isLeech:
             size = get_path_size(up_dir)
             for s in m_size:
                 size = size - s
@@ -202,7 +245,7 @@ class MirrorLeechListener:
             with download_dict_lock:
                 download_dict[self.uid] = tg_upload_status
             update_all_messages()
-            tg.upload(o_files)
+            tg.upload(o_files, m_size)
         else:
             up_path = f'{up_dir}/{up_name}'
             size = get_path_size(up_path)
@@ -215,7 +258,7 @@ class MirrorLeechListener:
             drive.upload(up_name)
 
     def onUploadComplete(self, link: str, size, files, folders, typ, name):
-        if not self.isPrivate and config_dict['INCOMPLETE_TASK_NOTIFIER'] and DB_URI:
+        if not self.isPrivate and config_dict['INCOMPLETE_TASK_NOTIFIER'] and DATABASE_URL:
             DbManger().rm_complete_task(self.message.link)
         msg = f"<b>Name: </b><code>{escape(name)}</code>\n\n<b>Size: </b>{size}"
         if self.isLeech:
@@ -238,6 +281,9 @@ class MirrorLeechListener:
             if self.seed:
                 if self.newDir:
                     clean_target(self.newDir)
+                with queue_dict_lock:
+                    if self.uid in non_queued_up:
+                        non_queued_up.remove(self.uid)
                 return
         else:
             msg += f'\n\n<b>Type: </b>{typ}'
@@ -259,62 +305,89 @@ class MirrorLeechListener:
                     if config_dict['VIEW_LINK']:
                         share_urls = f'{INDEX_URL}/{url_path}?a=view'
                         buttons.buildbutton("🌐 View Link", share_urls)
-            sendMarkup(msg, self.bot, self.message, buttons.build_menu(2))
+            sendMessage(msg, self.bot, self.message, buttons.build_menu(2))
             if self.seed:
                 if self.isZip:
                     clean_target(f"{self.dir}/{name}")
                 elif self.newDir:
                     clean_target(self.newDir)
+                with queue_dict_lock:
+                    if self.uid in non_queued_up:
+                        non_queued_up.remove(self.uid)
                 return
         clean_download(self.dir)
         with download_dict_lock:
-            try:
+            if self.uid in download_dict.keys():
                 del download_dict[self.uid]
-            except Exception as e:
-                LOGGER.error(str(e))
             count = len(download_dict)
         if count == 0:
             self.clean()
         else:
             update_all_messages()
 
+        with queue_dict_lock:
+            if self.uid in non_queued_up:
+                non_queued_up.remove(self.uid)
+
+        start_from_queued()
+
     def onDownloadError(self, error):
-        error = error.replace('<', ' ').replace('>', ' ')
         clean_download(self.dir)
         if self.newDir:
             clean_download(self.newDir)
         with download_dict_lock:
-            try:
+            if self.uid in download_dict.keys():
                 del download_dict[self.uid]
-            except Exception as e:
-                LOGGER.error(str(e))
             count = len(download_dict)
-        msg = f"{self.tag} your download has been stopped due to: {error}"
+            if self.uid in self.sameDir:
+                self.sameDir.remove(self.uid)
+        msg = f"{self.tag} your download has been stopped due to: {escape(error)}"
         sendMessage(msg, self.bot, self.message)
         if count == 0:
             self.clean()
         else:
             update_all_messages()
 
-        if not self.isPrivate and config_dict['INCOMPLETE_TASK_NOTIFIER'] and DB_URI:
+        if not self.isPrivate and config_dict['INCOMPLETE_TASK_NOTIFIER'] and DATABASE_URL:
             DbManger().rm_complete_task(self.message.link)
 
+        with queue_dict_lock:
+            if self.uid in queued_dl:
+                del queued_dl[self.uid]
+            if self.uid in non_queued_dl:
+                non_queued_dl.remove(self.uid)
+            if self.uid in queued_up:
+                del queued_up[self.uid]
+            if self.uid in non_queued_up:
+                non_queued_up.remove(self.uid)
+
+        self.queuedUp = False
+        start_from_queued()
+
     def onUploadError(self, error):
-        e_str = error.replace('<', '').replace('>', '')
         clean_download(self.dir)
         if self.newDir:
             clean_download(self.newDir)
         with download_dict_lock:
-            try:
+            if self.uid in download_dict.keys():
                 del download_dict[self.uid]
-            except Exception as e:
-                LOGGER.error(str(e))
             count = len(download_dict)
-        sendMessage(f"{self.tag} {e_str}", self.bot, self.message)
+            if self.uid in self.sameDir:
+                self.sameDir.remove(self.uid)
+        sendMessage(f"{self.tag} {escape(error)}", self.bot, self.message)
         if count == 0:
             self.clean()
         else:
             update_all_messages()
 
-        if not self.isPrivate and config_dict['INCOMPLETE_TASK_NOTIFIER'] and DB_URI:
+        if not self.isPrivate and config_dict['INCOMPLETE_TASK_NOTIFIER'] and DATABASE_URL:
             DbManger().rm_complete_task(self.message.link)
+
+        with queue_dict_lock:
+            if self.uid in queued_up:
+                del queued_up[self.uid]
+            if self.uid in non_queued_up:
+                non_queued_up.remove(self.uid)
+
+        self.queuedUp = False
+        start_from_queued()

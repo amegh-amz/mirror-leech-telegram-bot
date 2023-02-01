@@ -9,7 +9,7 @@ from threading import Lock, Thread
 from bot import download_dict, download_dict_lock, get_client, LOGGER, QbInterval, config_dict
 from bot.helper.mirror_utils.status_utils.qbit_download_status import QbDownloadStatus
 from bot.helper.mirror_utils.upload_utils.gdriveTools import GoogleDriveHelper
-from bot.helper.telegram_helper.message_utils import sendMessage, sendMarkup, deleteMessage, sendStatusMessage, update_all_messages, sendFile
+from bot.helper.telegram_helper.message_utils import sendMessage, deleteMessage, sendStatusMessage, update_all_messages
 from bot.helper.ext_utils.bot_utils import get_readable_time, setInterval, bt_selection_buttons, getDownloadByGid, new_thread
 from bot.helper.ext_utils.fs_utils import clean_unwanted, get_base_name
 
@@ -98,7 +98,7 @@ def add_qb_torrent(link, path, listener, ratio, seed_time):
             client.torrents_pause(torrent_hashes=ext_hash)
             SBUTTONS = bt_selection_buttons(ext_hash)
             msg = "Your download paused. Choose files then press Done Selecting button to start downloading."
-            sendMarkup(msg, listener.bot, listener.message, SBUTTONS)
+            sendMessage(msg, listener.bot, listener.message, SBUTTONS)
         else:
             sendStatusMessage(listener.message, listener.bot)
     except Exception as e:
@@ -161,17 +161,17 @@ def __stop_duplicate(client, tor):
                 except:
                     qbname = None
             if qbname is not None:
-                cap, f_name = GoogleDriveHelper().drive_list(qbname, True)
-                if cap:
+                 qbmsg, button = GoogleDriveHelper().drive_list(qbname, True)
+                 if qbmsg:
                     __onDownloadError("File/Folder is already available in Drive.", client, tor)
-                    cap = f"Here are the search results:\n\n{cap}"
-                    sendFile(listener.bot, listener.message, f_name, cap)
+                    sendMessage("Here are the search results:", listener.bot, listener.message, button)
                     return
     except:
         pass
 
 @new_thread
 def __onDownloadComplete(client, tor):
+    sleep(2)
     download = getDownloadByGid(tor.hash[:12])
     try:
         listener = download.listener()

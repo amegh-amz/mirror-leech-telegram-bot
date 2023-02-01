@@ -2,7 +2,7 @@ from os import path as ospath, makedirs
 from pymongo import MongoClient
 from pymongo.errors import PyMongoError
 
-from bot import DB_URI, user_data, rss_dict, LOGGER, bot_id, config_dict, aria2_options, qbit_options
+from bot import DATABASE_URL, user_data, rss_dict, LOGGER, bot_id, config_dict, aria2_options, qbit_options
 
 class DbManger:
     def __init__(self):
@@ -13,7 +13,7 @@ class DbManger:
 
     def __connect(self):
         try:
-            self.__conn = MongoClient(DB_URI)
+            self.__conn = MongoClient(DATABASE_URL)
             self.__db = self.__conn.mltb
         except PyMongoError as e:
             LOGGER.error(f"Error in DB connection: {e}")
@@ -22,9 +22,8 @@ class DbManger:
     def db_load(self):
         if self.__err:
             return
-        # Save bot settings if not exists
-        if self.__db.settings.config.find_one({'_id': bot_id}) is None:
-            self.__db.settings.config.update_one({'_id': bot_id}, {'$set': config_dict}, upsert=True)
+        # Save bot settings
+        self.__db.settings.config.update_one({'_id': bot_id}, {'$set': config_dict}, upsert=True)
         # Save Aria2c options
         if self.__db.settings.aria2c.find_one({'_id': bot_id}) is None:
             self.__db.settings.aria2c.update_one({'_id': bot_id}, {'$set': aria2_options}, upsert=True)
@@ -33,7 +32,8 @@ class DbManger:
             self.__db.settings.qbittorrent.update_one({'_id': bot_id}, {'$set': qbit_options}, upsert=True)
         # User Data
         if self.__db.users.find_one():
-            rows = self.__db.users.find({})  # return a dict ==> {_id, is_sudo, is_auth, as_doc, thumb}
+            rows = self.__db.users.find({})
+            # return a dict ==> {_id, is_sudo, is_auth, as_doc, thumb, yt_ql, media_group, equal_splits, split_size}
             for row in rows:
                 uid = row['_id']
                 del row['_id']
@@ -77,8 +77,11 @@ class DbManger:
     def update_private_file(self, path):
         if self.__err:
             return
-        with open(path, 'rb+') as pf:
-            pf_bin = pf.read()
+        if ospath.exists(path):
+            with open(path, 'rb+') as pf:
+                pf_bin = pf.read()
+        else:
+            pf_bin = ''
         path = path.replace('.', '__')
         self.__db.settings.files.update_one({'_id': bot_id}, {'$set': {path: pf_bin}}, upsert=True)
         self.__conn.close()
@@ -150,9 +153,9 @@ class DbManger:
     def trunc_table(self, name):
         if self.__err:
             return
-        self.__db[name].drop()
+        self.__db[name][bot_id].drop()
         self.__conn.close()
 
-if DB_URI:
+if DATABASE_URL:
     DbManger().db_load()
 
