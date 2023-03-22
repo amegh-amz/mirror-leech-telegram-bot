@@ -1,7 +1,8 @@
+#!/usr/bin/env python3
 from time import time
 
 from bot import aria2, LOGGER
-from bot.helper.ext_utils.bot_utils import MirrorStatus, get_readable_time
+from bot.helper.ext_utils.bot_utils import MirrorStatus, get_readable_time, sync_to_async
 
 def get_download(gid):
     try:
@@ -22,10 +23,11 @@ class AriaDownloadStatus:
         self.message = listener.message
 
     def __update(self):
-        self.__download = self.__download.live
         if self.__download is None:
             self.__download = get_download(self.__gid)
-        elif self.__download.followed_by_ids:
+        else:
+            self.__download = self.__download.live
+        if self.__download.followed_by_ids:
             self.__gid = self.__download.followed_by_ids[0]
             self.__download = get_download(self.__gid)
 
@@ -36,15 +38,8 @@ class AriaDownloadStatus:
         """
         return self.__download.progress_string()
 
-    def size_raw(self):
-        """
-        Gets total size of the mirror file/folder
-        :return: total size of mirror
-        """
-        return self.__download.total_length
-
     def processed_bytes(self):
-        return self.__download.completed_length
+        return self.__download.completed_length_string()
 
     def speed(self):
         self.__update()
@@ -100,18 +95,18 @@ class AriaDownloadStatus:
         self.__update()
         return self.__gid
 
-    def cancel_download(self):
-        self.__update()
+    async def cancel_download(self):
+        await sync_to_async(self.__update)
         if self.__download.seeder and self.seeding:
             LOGGER.info(f"Cancelling Seed: {self.name()}")
-            self.__listener.onUploadError(f"Seeding stopped with Ratio: {self.ratio()} and Time: {self.seeding_time()}")
-            aria2.remove([self.__download], force=True, files=True)
+            await self.__listener.onUploadError(f"Seeding stopped with Ratio: {self.ratio()} and Time: {self.seeding_time()}")
+            await sync_to_async(aria2.remove, [self.__download], force=True, files=True)
         elif downloads := self.__download.followed_by:
             LOGGER.info(f"Cancelling Download: {self.name()}")
-            self.__listener.onDownloadError('Download cancelled by user!')
+            await self.__listener.onDownloadError('Download cancelled by user!')
             downloads.append(self.__download)
-            aria2.remove(downloads, force=True, files=True)
+            await sync_to_async(aria2.remove, downloads, force=True, files=True)
         else:
             LOGGER.info(f"Cancelling Download: {self.name()}")
-            self.__listener.onDownloadError('Download stopped by user!')
-            aria2.remove([self.__download], force=True, files=True)
+            await self.__listener.onDownloadError('Download stopped by user!')
+            await sync_to_async(aria2.remove, [self.__download], force=True, files=True)

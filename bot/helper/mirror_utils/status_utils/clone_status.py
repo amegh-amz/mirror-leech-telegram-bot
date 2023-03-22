@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 from bot.helper.ext_utils.bot_utils import MirrorStatus, get_readable_file_size, get_readable_time
 
 
@@ -9,10 +10,7 @@ class CloneStatus:
         self.message = message
 
     def processed_bytes(self):
-        return self.__obj.transferred_size
-
-    def size_raw(self):
-        return self.__size
+        return get_readable_file_size(self.__obj.transferred_size)
 
     def size(self):
         return get_readable_file_size(self.__size)
@@ -35,18 +33,12 @@ class CloneStatus:
     def progress(self):
         return f'{round(self.progress_raw(), 2)}%'
 
-    def speed_raw(self):
-        """
-        :return: Download speed in Bytes/Seconds
-        """
-        return self.__obj.cspeed()
-
     def speed(self):
-        return f'{get_readable_file_size(self.speed_raw())}/s'
+        return f'{get_readable_file_size(self.__obj.cspeed())}/s'
 
     def eta(self):
         try:
-            seconds = (self.__size - self.__obj.transferred_size) / self.speed_raw()
+            seconds = (self.__size - self.__obj.transferred_size) / self.__obj.cspeed()
             return f'{get_readable_time(seconds)}'
         except:
             return '-'
