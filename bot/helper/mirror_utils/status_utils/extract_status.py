@@ -43,7 +43,7 @@ class ExtractStatus:
     def eta(self):
         try:
             seconds = (self.__size - self.processed_raw()) / self.speed_raw()
-            return f'{get_readable_time(seconds)}'
+            return get_readable_time(seconds)
         except:
             return '-'
 
@@ -52,7 +52,7 @@ class ExtractStatus:
 
     def processed_bytes(self):
         return get_readable_file_size(self.processed_raw())
-    
+
     def processed_raw(self):
         if self.__listener.newDir:
             return async_to_sync(get_path_size, self.__listener.newDir)
@@ -66,4 +66,6 @@ class ExtractStatus:
         LOGGER.info(f'Cancelling Extract: {self.__name}')
         if self.__listener.suproc is not None:
             self.__listener.suproc.kill()
+        else:
+            self.__listener.suproc = 'cancelled'
         await self.__listener.onUploadError('extracting stopped by user!')

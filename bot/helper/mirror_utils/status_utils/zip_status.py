@@ -43,13 +43,13 @@ class ZipStatus:
     def eta(self):
         try:
             seconds = (self.__size - self.processed_raw()) / self.speed_raw()
-            return f'{get_readable_time(seconds)}'
+            return get_readable_time(seconds)
         except:
             return '-'
 
     def status(self):
         return MirrorStatus.STATUS_ARCHIVING
-    
+
     def processed_raw(self):
         if self.__listener.newDir:
             return async_to_sync(get_path_size, self.__listener.newDir)
@@ -57,7 +57,7 @@ class ZipStatus:
             return async_to_sync(get_path_size, self.__listener.dir) - self.__size
 
     def processed_bytes(self):
-            return get_readable_file_size(self.processed_raw())
+        return get_readable_file_size(self.processed_raw())
 
     def download(self):
         return self
@@ -66,4 +66,6 @@ class ZipStatus:
         LOGGER.info(f'Cancelling Archive: {self.__name}')
         if self.__listener.suproc is not None:
             self.__listener.suproc.kill()
+        else:
+            self.__listener.suproc = 'cancelled'
         await self.__listener.onUploadError('archiving stopped by user!')

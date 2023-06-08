@@ -18,8 +18,9 @@ from bot.helper.telegram_helper.bot_commands import BotCommands
 from bot.helper.telegram_helper.button_build import ButtonMaker
 from bot.helper.ext_utils.bot_utils import setInterval, sync_to_async, new_thread
 from bot.helper.ext_utils.db_handler import DbManger
-from bot.helper.ext_utils.queued_starter import start_from_queued
-from bot.modules.search import initiate_search_tools
+from bot.helper.ext_utils.task_manager import start_from_queued
+from bot.helper.mirror_utils.rclone_utils.serve import rclone_serve_booter
+from bot.modules.torrent_search import initiate_search_tools
 from bot.modules.rss import addJob
 
 START = 0
@@ -95,20 +96,16 @@ async def load_config():
     if len(EXTENSION_FILTER) > 0:
         fx = EXTENSION_FILTER.split()
         GLOBAL_EXTENSION_FILTER.clear()
-        GLOBAL_EXTENSION_FILTER.append('.aria2')
+        GLOBAL_EXTENSION_FILTER.append('aria2')
         for x in fx:
             if x.strip().startswith('.'):
                 x = x.lstrip('.')
             GLOBAL_EXTENSION_FILTER.append(x.strip().lower())
 
-    MEGA_API_KEY = environ.get('MEGA_API_KEY', '')
-    if len(MEGA_API_KEY) == 0:
-        MEGA_API_KEY = ''
-
-    MEGA_EMAIL_ID = environ.get('MEGA_EMAIL_ID', '')
+    MEGA_EMAIL = environ.get('MEGA_EMAIL', '')
     MEGA_PASSWORD = environ.get('MEGA_PASSWORD', '')
-    if len(MEGA_EMAIL_ID) == 0 or len(MEGA_PASSWORD) == 0:
-        MEGA_EMAIL_ID = ''
+    if len(MEGA_EMAIL) == 0 or len(MEGA_PASSWORD) == 0:
+        MEGA_EMAIL = ''
         MEGA_PASSWORD = ''
 
     UPTOBOX_TOKEN = environ.get('UPTOBOX_TOKEN', '')
@@ -149,23 +146,25 @@ async def load_config():
             if Interval:
                 Interval[0].cancel()
                 Interval.clear()
-                Interval.append(setInterval(STATUS_UPDATE_INTERVAL, update_all_messages))
+                Interval.append(setInterval(
+                    STATUS_UPDATE_INTERVAL, update_all_messages))
 
-    AUTO_DELETE_MESSAGE_DURATION = environ.get('AUTO_DELETE_MESSAGE_DURATION', '')
+    AUTO_DELETE_MESSAGE_DURATION = environ.get(
+        'AUTO_DELETE_MESSAGE_DURATION', '')
     if len(AUTO_DELETE_MESSAGE_DURATION) == 0:
         AUTO_DELETE_MESSAGE_DURATION = 30
     else:
         AUTO_DELETE_MESSAGE_DURATION = int(AUTO_DELETE_MESSAGE_DURATION)
 
-    YT_DLP_QUALITY = environ.get('YT_DLP_QUALITY', '')
-    if len(YT_DLP_QUALITY) == 0:
-        YT_DLP_QUALITY = ''
+    YT_DLP_OPTIONS = environ.get('YT_DLP_OPTIONS', '')
+    if len(YT_DLP_OPTIONS) == 0:
+        YT_DLP_OPTIONS = ''
 
     SEARCH_LIMIT = environ.get('SEARCH_LIMIT', '')
     SEARCH_LIMIT = 0 if len(SEARCH_LIMIT) == 0 else int(SEARCH_LIMIT)
 
-    DUMP_CHAT = environ.get('DUMP_CHAT', '')
-    DUMP_CHAT = '' if len(DUMP_CHAT) == 0 else int(DUMP_CHAT)
+    DUMP_CHAT_ID = environ.get('DUMP_CHAT_ID', '')
+    DUMP_CHAT_ID = '' if len(DUMP_CHAT_ID) == 0 else int(DUMP_CHAT_ID)
 
     STATUS_LIMIT = environ.get('STATUS_LIMIT', '')
     STATUS_LIMIT = 10 if len(STATUS_LIMIT) == 0 else int(STATUS_LIMIT)
@@ -222,9 +221,6 @@ async def load_config():
     STOP_DUPLICATE = environ.get('STOP_DUPLICATE', '')
     STOP_DUPLICATE = STOP_DUPLICATE.lower() == 'true'
 
-    VIEW_LINK = environ.get('VIEW_LINK', '')
-    VIEW_LINK = VIEW_LINK.lower() == 'true'
-
     IS_TEAM_DRIVE = environ.get('IS_TEAM_DRIVE', '')
     IS_TEAM_DRIVE = IS_TEAM_DRIVE.lower() == 'true'
 
@@ -243,19 +239,35 @@ async def load_config():
     MEDIA_GROUP = environ.get('MEDIA_GROUP', '')
     MEDIA_GROUP = MEDIA_GROUP.lower() == 'true'
 
-    SERVER_PORT = environ.get('SERVER_PORT', '')
-    SERVER_PORT = 80 if len(SERVER_PORT) == 0 else int(SERVER_PORT)
+    BASE_URL_PORT = environ.get('BASE_URL_PORT', '')
+    BASE_URL_PORT = 80 if len(BASE_URL_PORT) == 0 else int(BASE_URL_PORT)
+
+    RCLONE_SERVE_URL = environ.get('RCLONE_SERVE_URL', '')
+    if len(RCLONE_SERVE_URL) == 0:
+        RCLONE_SERVE_URL = ''
+
+    RCLONE_SERVE_PORT = environ.get('RCLONE_SERVE_PORT', '')
+    RCLONE_SERVE_PORT = 8080 if len(
+        RCLONE_SERVE_PORT) == 0 else int(RCLONE_SERVE_PORT)
+
+    RCLONE_SERVE_USER = environ.get('RCLONE_SERVE_USER', '')
+    if len(RCLONE_SERVE_USER) == 0:
+        RCLONE_SERVE_USER = ''
+
+    RCLONE_SERVE_PASS = environ.get('RCLONE_SERVE_PASS', '')
+    if len(RCLONE_SERVE_PASS) == 0:
+        RCLONE_SERVE_PASS = ''
 
     await (await create_subprocess_exec("pkill", "-9", "-f", "gunicorn")).wait()
     BASE_URL = environ.get('BASE_URL', '').rstrip("/")
     if len(BASE_URL) == 0:
         BASE_URL = ''
     else:
-        await create_subprocess_shell(f"gunicorn web.wserver:app --bind 0.0.0.0:{SERVER_PORT}")
+        await create_subprocess_shell(f"gunicorn web.wserver:app --bind 0.0.0.0:{BASE_URL_PORT} --worker-class gevent")
 
     UPSTREAM_REPO = environ.get('UPSTREAM_REPO', '')
     if len(UPSTREAM_REPO) == 0:
-       UPSTREAM_REPO = ''
+        UPSTREAM_REPO = ''
 
     UPSTREAM_BRANCH = environ.get('UPSTREAM_BRANCH', '')
     if len(UPSTREAM_BRANCH) == 0:
@@ -286,12 +298,13 @@ async def load_config():
                         'AUTHORIZED_CHATS': AUTHORIZED_CHATS,
                         'AUTO_DELETE_MESSAGE_DURATION': AUTO_DELETE_MESSAGE_DURATION,
                         'BASE_URL': BASE_URL,
+                        'BASE_URL_PORT': BASE_URL_PORT,
                         'BOT_TOKEN': BOT_TOKEN,
                         'CMD_SUFFIX': CMD_SUFFIX,
                         'DATABASE_URL': DATABASE_URL,
                         'DEFAULT_UPLOAD': DEFAULT_UPLOAD,
                         'DOWNLOAD_DIR': DOWNLOAD_DIR,
-                        'DUMP_CHAT': DUMP_CHAT,
+                        'DUMP_CHAT_ID': DUMP_CHAT_ID,
                         'EQUAL_SPLITS': EQUAL_SPLITS,
                         'EXTENSION_FILTER': EXTENSION_FILTER,
                         'GDRIVE_ID': GDRIVE_ID,
@@ -301,8 +314,7 @@ async def load_config():
                         'LEECH_FILENAME_PREFIX': LEECH_FILENAME_PREFIX,
                         'LEECH_SPLIT_SIZE': LEECH_SPLIT_SIZE,
                         'MEDIA_GROUP': MEDIA_GROUP,
-                        'MEGA_API_KEY': MEGA_API_KEY,
-                        'MEGA_EMAIL_ID': MEGA_EMAIL_ID,
+                        'MEGA_EMAIL': MEGA_EMAIL,
                         'MEGA_PASSWORD': MEGA_PASSWORD,
                         'OWNER_ID': OWNER_ID,
                         'QUEUE_ALL': QUEUE_ALL,
@@ -310,12 +322,15 @@ async def load_config():
                         'QUEUE_UPLOAD': QUEUE_UPLOAD,
                         'RCLONE_FLAGS': RCLONE_FLAGS,
                         'RCLONE_PATH': RCLONE_PATH,
+                        'RCLONE_SERVE_URL': RCLONE_SERVE_URL,
+                        'RCLONE_SERVE_USER': RCLONE_SERVE_USER,
+                        'RCLONE_SERVE_PASS': RCLONE_SERVE_PASS,
+                        'RCLONE_SERVE_PORT': RCLONE_SERVE_PORT,
                         'RSS_CHAT_ID': RSS_CHAT_ID,
                         'RSS_DELAY': RSS_DELAY,
                         'SEARCH_API_LINK': SEARCH_API_LINK,
                         'SEARCH_LIMIT': SEARCH_LIMIT,
                         'SEARCH_PLUGINS': SEARCH_PLUGINS,
-                        'SERVER_PORT': SERVER_PORT,
                         'STATUS_LIMIT': STATUS_LIMIT,
                         'STATUS_UPDATE_INTERVAL': STATUS_UPDATE_INTERVAL,
                         'STOP_DUPLICATE': STOP_DUPLICATE,
@@ -328,14 +343,15 @@ async def load_config():
                         'UPTOBOX_TOKEN': UPTOBOX_TOKEN,
                         'USER_SESSION_STRING': USER_SESSION_STRING,
                         'USE_SERVICE_ACCOUNTS': USE_SERVICE_ACCOUNTS,
-                        'VIEW_LINK': VIEW_LINK,
                         'WEB_PINCODE': WEB_PINCODE,
-                        'YT_DLP_QUALITY': YT_DLP_QUALITY})
+                        'YT_DLP_OPTIONS': YT_DLP_OPTIONS})
 
     if DATABASE_URL:
         await DbManger().update_config(config_dict)
     await initiate_search_tools()
     await start_from_queued()
+    await rclone_serve_booter()
+
 
 async def get_buttons(key=None, edit_type=None):
     buttons = ButtonMaker()
@@ -355,8 +371,9 @@ async def get_buttons(key=None, edit_type=None):
             buttons.ibutton('View', "botset view var")
         buttons.ibutton('Back', "botset back")
         buttons.ibutton('Close', "botset close")
-        for x in range(0, len(config_dict)-1, 10):
-            buttons.ibutton(f'{int(x/10)}', f"botset start var {x}", position='footer')
+        for x in range(0, len(config_dict), 10):
+            buttons.ibutton(
+                f'{int(x/10)}', f"botset start var {x}", position='footer')
         msg = f'Config Variables | Page: {int(START/10)} | State: {STATE}'
     elif key == 'private':
         buttons.ibutton('Back', "botset back")
@@ -375,8 +392,9 @@ Timeout: 60 sec'''
         buttons.ibutton('Add new key', "botset editaria newkey")
         buttons.ibutton('Back', "botset back")
         buttons.ibutton('Close', "botset close")
-        for x in range(0, len(aria2_options)-1, 10):
-            buttons.ibutton(f'{int(x/10)}', f"botset start aria {x}", position='footer')
+        for x in range(0, len(aria2_options), 10):
+            buttons.ibutton(
+                f'{int(x/10)}', f"botset start aria {x}", position='footer')
         msg = f'Aria2c Options | Page: {int(START/10)} | State: {STATE}'
     elif key == 'qbit':
         for k in list(qbit_options.keys())[START:10+START]:
@@ -387,8 +405,9 @@ Timeout: 60 sec'''
             buttons.ibutton('View', "botset view qbit")
         buttons.ibutton('Back', "botset back")
         buttons.ibutton('Close', "botset close")
-        for x in range(0, len(qbit_options)-1, 10):
-            buttons.ibutton(f'{int(x/10)}', f"botset start qbit {x}", position='footer')
+        for x in range(0, len(qbit_options), 10):
+            buttons.ibutton(
+                f'{int(x/10)}', f"botset start qbit {x}", position='footer')
         msg = f'Qbittorrent Options | Page: {int(START/10)} | State: {STATE}'
     elif edit_type == 'editvar':
         msg = ''
@@ -418,11 +437,13 @@ Timeout: 60 sec'''
     button = buttons.build_menu(1) if key is None else buttons.build_menu(2)
     return msg, button
 
+
 async def update_buttons(message, key=None, edit_type=None):
     msg, button = await get_buttons(key, edit_type)
     await editMessage(message, msg, button)
 
-async def edit_variable(client, message, pre_message, key):
+
+async def edit_variable(_, message, pre_message, key):
     handler_dict[message.chat.id] = False
     value = message.text
     if value.lower() == 'true':
@@ -437,7 +458,7 @@ async def edit_variable(client, message, pre_message, key):
     elif key == 'DOWNLOAD_DIR':
         if not value.endswith('/'):
             value += '/'
-    elif key in ['DUMP_CHAT', 'RSS_CHAT_ID']:
+    elif key in ['DUMP_CHAT_ID', 'RSS_CHAT_ID']:
         value = int(value)
     elif key == 'STATUS_UPDATE_INTERVAL':
         value = int(value)
@@ -459,10 +480,11 @@ async def edit_variable(client, message, pre_message, key):
         aria2_options['bt-stop-timeout'] = f'{value}'
     elif key == 'LEECH_SPLIT_SIZE':
         value = min(int(value), MAX_SPLIT_SIZE)
-    elif key == 'SERVER_PORT':
+    elif key == 'BASE_URL_PORT':
         value = int(value)
-        await (await create_subprocess_exec("pkill", "-9", "-f", "gunicorn")).wait()
-        await create_subprocess_shell(f"gunicorn web.wserver:app --bind 0.0.0.0:{value}")
+        if config_dict['BASE_URL']:
+            await (await create_subprocess_exec("pkill", "-9", "-f", "gunicorn")).wait()
+            await create_subprocess_shell(f"gunicorn web.wserver:app --bind 0.0.0.0:{value} --worker-class gevent")
     elif key == 'EXTENSION_FILTER':
         fx = value.split()
         GLOBAL_EXTENSION_FILTER.clear()
@@ -492,8 +514,11 @@ async def edit_variable(client, message, pre_message, key):
         await initiate_search_tools()
     elif key in ['QUEUE_ALL', 'QUEUE_DOWNLOAD', 'QUEUE_UPLOAD']:
         await start_from_queued()
+    elif key in ['RCLONE_SERVE_URL', 'RCLONE_SERVE_PORT', 'RCLONE_SERVE_USER', 'RCLONE_SERVE_PASS']:
+        await rclone_serve_booter()
 
-async def edit_aria(client, message, pre_message, key):
+
+async def edit_aria(_, message, pre_message, key):
     handler_dict[message.chat.id] = False
     value = message.text
     if key == 'newkey':
@@ -518,7 +543,8 @@ async def edit_aria(client, message, pre_message, key):
     if DATABASE_URL:
         await DbManger().update_aria2(key, value)
 
-async def edit_qbit(client, message, pre_message, key):
+
+async def edit_qbit(_, message, pre_message, key):
     handler_dict[message.chat.id] = False
     value = message.text
     if value.lower() == 'true':
@@ -536,15 +562,18 @@ async def edit_qbit(client, message, pre_message, key):
     if DATABASE_URL:
         await DbManger().update_qbittorrent(key, value)
 
-async def update_private_file(client, message, pre_message):
+
+async def update_private_file(_, message, pre_message):
     handler_dict[message.chat.id] = False
     if not message.media and (file_name := message.text):
         fn = file_name.rsplit('.zip', 1)[0]
-        if await aiopath.isfile(fn):
+        if await aiopath.isfile(fn) and file_name != 'config.env':
             await remove(fn)
         if fn == 'accounts':
             if await aiopath.exists('accounts'):
                 await aiormtree('accounts')
+            if await aiopath.exists('rclone_sa'):
+                await aiormtree('rclone_sa')
             config_dict['USE_SERVICE_ACCOUNTS'] = False
             if DATABASE_URL:
                 await DbManger().update_config({'USE_SERVICE_ACCOUNTS': False})
@@ -559,6 +588,8 @@ async def update_private_file(client, message, pre_message):
         if file_name == 'accounts.zip':
             if await aiopath.exists('accounts'):
                 await aiormtree('accounts')
+            if await aiopath.exists('rclone_sa'):
+                await aiormtree('rclone_sa')
             await (await create_subprocess_exec("7z", "x", "-o.", "-aoa", "accounts.zip", "accounts/*.json")).wait()
             await (await create_subprocess_exec("chmod", "-R", "777", "accounts")).wait()
         elif file_name == 'list_drives.txt':
@@ -587,7 +618,7 @@ async def update_private_file(client, message, pre_message):
             await (await create_subprocess_exec("cp", ".netrc", "/root/.netrc")).wait()
         elif file_name == 'config.env':
             load_dotenv('config.env', override=True)
-            load_config()
+            await load_config()
         if '@github.com' in config_dict['UPSTREAM_REPO']:
             buttons = ButtonMaker()
             msg = 'Push to UPSTREAM_REPO ?'
@@ -596,26 +627,32 @@ async def update_private_file(client, message, pre_message):
             await sendMessage(message, msg, buttons.build_menu(2))
         else:
             await message.delete()
+    if file_name == 'rclone.conf':
+        await rclone_serve_booter()
     await update_buttons(pre_message)
-    if DATABASE_URL and file_name != 'config.env':
+    if DATABASE_URL:
         await DbManger().update_private_file(file_name)
     if await aiopath.exists('accounts.zip'):
         await remove('accounts.zip')
+
 
 async def event_handler(client, query, pfunc, rfunc, document=False):
     chat_id = query.message.chat.id
     handler_dict[chat_id] = True
     start_time = time()
+
     async def event_filter(_, __, event):
         user = event.from_user or event.sender_chat
         return bool(user.id == query.from_user.id and event.chat.id == chat_id and (event.text or event.document and document))
-    handler = client.add_handler(MessageHandler(pfunc, filters=create(event_filter)), group=-1)
+    handler = client.add_handler(MessageHandler(
+        pfunc, filters=create(event_filter)), group=-1)
     while handler_dict[chat_id]:
         await sleep(0.5)
         if time() - start_time > 60:
             handler_dict[chat_id] = False
             await rfunc()
     client.remove_handler(*handler)
+
 
 @new_thread
 async def edit_bot_settings(client, query):
@@ -647,7 +684,8 @@ async def edit_bot_settings(client, query):
                     if Interval:
                         Interval[0].cancel()
                         Interval.clear()
-                        Interval.append(setInterval(value, update_all_messages))
+                        Interval.append(setInterval(
+                            value, update_all_messages))
         elif data[2] == 'EXTENSION_FILTER':
             GLOBAL_EXTENSION_FILTER.clear()
             GLOBAL_EXTENSION_FILTER.append('.aria2')
@@ -664,10 +702,11 @@ async def edit_bot_settings(client, query):
                 await DbManger().update_aria2('bt-stop-timeout', '0')
         elif data[2] == 'BASE_URL':
             await (await create_subprocess_exec("pkill", "-9", "-f", "gunicorn")).wait()
-        elif data[2] == 'SERVER_PORT':
+        elif data[2] == 'BASE_URL_PORT':
             value = 80
-            await (await create_subprocess_exec("pkill", "-9", "-f", "gunicorn")).wait()
-            await create_subprocess_shell("gunicorn web.wserver:app --bind 0.0.0.0:80")
+            if config_dict['BASE_URL']:
+                await (await create_subprocess_exec("pkill", "-9", "-f", "gunicorn")).wait()
+                await create_subprocess_shell("gunicorn web.wserver:app --bind 0.0.0.0:80 --worker-class gevent")
         elif data[2] == 'GDRIVE_ID':
             if DRIVES_NAMES and DRIVES_NAMES[0] == 'Main':
                 DRIVES_NAMES.pop(0)
@@ -686,6 +725,8 @@ async def edit_bot_settings(client, query):
             await initiate_search_tools()
         elif data[2] in ['QUEUE_ALL', 'QUEUE_DOWNLOAD', 'QUEUE_UPLOAD']:
             await start_from_queued()
+        elif data[2] in ['RCLONE_SERVE_URL', 'RCLONE_SERVE_PORT', 'RCLONE_SERVE_USER', 'RCLONE_SERVE_PASS']:
+            await rclone_serve_booter()
     elif data[1] == 'resetaria':
         handler_dict[message.chat.id] = False
         aria2_defaults = await sync_to_async(aria2.client.get_global_option)
@@ -761,7 +802,7 @@ async def edit_bot_settings(client, query):
         await event_handler(client, query, pfunc, rfunc)
     elif data[1] == 'editaria' and STATE == 'view':
         value = aria2_options[data[2]]
-        if len(value) > 200:
+        if len(str(value)) > 200:
             await query.answer()
             with BytesIO(str.encode(value)) as out_file:
                 out_file.name = f"{data[2]}.txt"
@@ -815,11 +856,14 @@ async def edit_bot_settings(client, query):
         await message.reply_to_message.delete()
         await message.delete()
 
-async def bot_settings(client, message):
+
+async def bot_settings(_, message):
     msg, button = await get_buttons()
     globals()['START'] = 0
     await sendMessage(message, msg, button)
 
 
-bot.add_handler(MessageHandler(bot_settings, filters=command(BotCommands.BotSetCommand) & CustomFilters.sudo))
-bot.add_handler(CallbackQueryHandler(edit_bot_settings, filters=regex("^botset") & CustomFilters.sudo))
+bot.add_handler(MessageHandler(bot_settings, filters=command(
+    BotCommands.BotSetCommand) & CustomFilters.sudo))
+bot.add_handler(CallbackQueryHandler(edit_bot_settings,
+                filters=regex("^botset") & CustomFilters.sudo))
